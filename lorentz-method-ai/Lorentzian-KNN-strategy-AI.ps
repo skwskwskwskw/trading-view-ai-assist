@@ -1,0 +1,87 @@
+//@version=5
+
+strategy(
+     title                = "Lorentzian-KNN ML Strategy",
+     overlay              = true,
+     default_qty_type     = strategy.percent_of_equity,
+     default_qty_value    = 10,               // risk 10 % of equity per trade
+     pyramiding           = 0,                // one position per side
+     commission_type      = strategy.commission.percent,
+     commission_value     = 0.05,             // 0.05 % per trade
+     calc_on_order_fills  = false,
+     calc_on_every_tick   = false,
+     max_bars_back        = 1000)
+
+// ────── IMPORT LIBRARIES ───────────────────────────────────────────────────────
+import jdehorty/MLExtensions/2 as ml
+import jdehorty/KernelFunctions/2 as kernels
+
+// ────── USER INPUTS ───────────────────────────────────────────────────────────
+kNeighbours      = input.int  (7  , "K-nearest (odd)", minval = 1)
+trainSize        = input.int  (300, "Rolling training bars", minval = 50)
+predTh           = input.float(0  , "Entry threshold (±)",     step   = 0.05)
+atrLen           = input.int  (14 , "ATR length")
+atrStopMult      = input.float(1.5, "ATR stop-loss ×",   step = 0.1)
+atrTargetMult    = input.float(3.0, "ATR target ×",      step = 0.1)
+useTrail         = input.bool (true, "Use ATR trailing stop")
+sess             = input.session("0000-2359:1234567", "Trading session")
+
+// ────── FEATURE ENGINEERING (same as indicator) ───────────────────────────────
+src      = close
+normDer  = ml.normalizeDeriv(src)
+rsi_n    = ml.n_rsi(src, 14)
+mom_n    = ml.n_mom(src, 10)
+gauss_sm = kern.gaussian(src, 21, 0.15)
+atr      = ta.atr(atrLen)
+
+// Current bar’s feature vector
+fvec = array.from(normDer, rsi_n, mom_n, gauss_sm, atr / src)
+
+// ────── ROLLING TRAINING SET ──────────────────────────────────────────────────
+var featHist  = array.new<array<float>>()   // array of feature vectors
+var classHist = array.new_float()           // +1 if next-bar up, −1 if down
+
+// Label derived **after** bar closes
+if barstate.isconfirmed
+    label = ta.change(src) > 0 ? 1.0 : -1.0
+    // maintain max length
+    if array.size(featHist) >= trainSize
+        array.shift(featHist)
+        array.shift(classHist)
+    array.push(featHist, fvec)
+    array.push(classHist, label)
+
+// ────── PREDICTION ────────────────────────────────────────────────────────────
+var float prediction = na
+if array.size(featHist) >= kNeighbours
+    prediction := ml.ann_knn_predict(fvec, featHist, classHist, kNeighbours) // >0 bull, <0 bear
+
+// Visual aid
+plot(prediction, "ML Score", color = prediction > 0 ? color.green : color.red)
+
+// ────── ENTRY LOGIC ───────────────────────────────────────────────────────────
+inSess = time(timeframe.period, sess)
+longOk  = inSess and (strategy.position_size == 0) and (prediction >  predTh)
+shortOk = inSess and (strategy.position_size == 0) and (prediction < -predTh)
+
+if longOk
+    strategy.entry("Long", strategy.long)
+    stop  = close - atrStopMult  * atr
+    limit = close + atrTargetMult * atr
+    strategy.exit("Long-X", from_entry = "Long",
+                  stop = stop,
+                  limit = limit,
+                  trail_points = useTrail ? atrStopMult * atr : na)
+
+if shortOk
+    strategy.entry("Short", strategy.short)
+    stop  = close + atrStopMult  * atr
+    limit = close - atrTargetMult * atr
+    strategy.exit("Short-X", from_entry = "Short",
+                  stop = stop,
+                  limit = limit,
+                  trail_points = useTrail ? atrStopMult * atr : na)
+
+// Optional bar-colouring
+barcolor(prediction >  predTh ? color.new(color.green,  0) :
+         prediction < -predTh ? color.new(color.red  ,  0) : na)

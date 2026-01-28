@@ -8,8 +8,10 @@ Workflow:
 from __future__ import annotations
 
 import itertools
+import os
+import random
 from dataclasses import dataclass
-from typing import Iterable, List
+from typing import Iterable, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -31,13 +33,22 @@ class OptimizationResult:
     profit: float
 
 
-def load_ohlcv(csv_file: st.runtime.uploaded_file_manager.UploadedFile) -> pd.DataFrame:
-    df = pd.read_csv(csv_file)
+DEFAULT_CSV_NAME = "MYX_FCPO1!, 5.csv"
+
+
+def load_ohlcv(
+    csv_file: Optional[st.runtime.uploaded_file_manager.UploadedFile] = None,
+    file_path: Optional[str] = None,
+) -> pd.DataFrame:
+    if csv_file is None and file_path is None:
+        raise ValueError("No CSV file provided.")
+    df = pd.read_csv(csv_file or file_path)
     df.columns = [col.strip().lower() for col in df.columns]
-    required = {"open", "high", "low", "close"}
+    required = {"time", "open", "high", "low", "close", "volume"}
     missing = required - set(df.columns)
     if missing:
         raise ValueError(f"Missing columns: {', '.join(sorted(missing))}")
+    df["time"] = pd.to_datetime(df["time"], unit="s", utc=True)
     return df
 
 
@@ -105,6 +116,7 @@ def walk_forward_optimize(
     feature_grid: List[List[FeatureSpec]],
     train_window: int,
     test_window: int,
+    max_combinations: Optional[int] = None,
 ) -> OptimizationResult:
     total_profit = 0.0
     best_params = None
@@ -120,7 +132,12 @@ def walk_forward_optimize(
         best_train_profit = -np.inf
         best_feature_set = None
 
-        for features in feature_grid:
+        if max_combinations is not None and max_combinations < len(feature_grid):
+            sampled_features = random.sample(feature_grid, max_combinations)
+        else:
+            sampled_features = feature_grid
+
+        for features in sampled_features:
             result = run_strategy(
                 train_data,
                 settings,
@@ -173,13 +190,26 @@ def main() -> None:
     st.set_page_config(page_title="Lorentzian Classification", layout="wide")
     st.title("Lorentzian Classification - Walk-Forward Optimizer")
 
-    uploaded = st.file_uploader("Upload OHLCV CSV", type=["csv"])
-    if uploaded is None:
-        st.info("Upload a CSV file with columns: open, high, low, close, volume (volume optional).")
-        return
+    default_path = os.path.join(os.path.dirname(__file__), DEFAULT_CSV_NAME)
+    uploaded = st.file_uploader(
+        "Upload OHLCV CSV (optional)",
+        type=["csv"],
+        help="Expected columns: time (unix), open, high, low, close, Volume.",
+    )
+    use_default = st.checkbox(f"Use default CSV ({DEFAULT_CSV_NAME})", value=True)
+    data_source_label = "uploaded file"
 
     try:
-        data = load_ohlcv(uploaded)
+        if uploaded is not None and not use_default:
+            data = load_ohlcv(csv_file=uploaded)
+        elif os.path.exists(default_path):
+            data = load_ohlcv(file_path=default_path)
+            data_source_label = DEFAULT_CSV_NAME
+        elif uploaded is not None:
+            data = load_ohlcv(csv_file=uploaded)
+        else:
+            st.error(f"Default file not found at {default_path}. Upload a CSV to continue.")
+            return
     except ValueError as exc:
         st.error(str(exc))
         return
@@ -189,7 +219,7 @@ def main() -> None:
         source=st.sidebar.selectbox("Source", ["close", "open", "high", "low"], index=0),
         neighbors_count=st.sidebar.slider("Neighbors Count", 1, 25, 8),
         max_bars_back=st.sidebar.slider("Max Bars Back", 200, 5000, 2000),
-        feature_count=st.sidebar.slider("Feature Count", 2, 5, 5),
+        feature_count=st.sidebar.slider("Feature Count", 1, 10, 5),
         color_compression=st.sidebar.slider("Color Compression", 1, 10, 1),
         show_exits=st.sidebar.checkbox("Show Default Exits", value=False),
         use_dynamic_exits=st.sidebar.checkbox("Use Dynamic Exits", value=False),
@@ -225,6 +255,10 @@ def main() -> None:
     st.sidebar.header("Walk-Forward Settings")
     train_window = st.sidebar.slider("Training Window (bars)", 200, 3000, 1000, 50)
     test_window = st.sidebar.slider("Test Window (bars)", 50, 1000, 250, 25)
+    optimizer_mode = st.sidebar.selectbox("Optimizer", ["Grid Search", "Random Search"], index=0)
+    max_combinations = None
+    if optimizer_mode == "Random Search":
+        max_combinations = st.sidebar.number_input("Random Samples per Window", 10, 5000, 200)
 
     st.sidebar.header("Feature Parameters (Auto-Optimized)")
     default_features = [
@@ -233,6 +267,11 @@ def main() -> None:
         ("CCI", 20, 1),
         ("ADX", 20, 2),
         ("RSI", 9, 1),
+        ("WT", 7, 14),
+        ("CCI", 30, 2),
+        ("ADX", 14, 2),
+        ("RSI", 21, 1),
+        ("WT", 5, 9),
     ]
 
     feature_names = []
@@ -244,13 +283,50 @@ def main() -> None:
             f"Type {idx + 1}",
             ["RSI", "WT", "CCI", "ADX"],
             index=["RSI", "WT", "CCI", "ADX"].index(name),
+            key=f"feature_type_{idx}",
         )
-        param_a_min = st.sidebar.number_input(f"F{idx + 1} Param A Min", 2, 50, min(14, default_a))
-        param_a_max = st.sidebar.number_input(f"F{idx + 1} Param A Max", 2, 100, max(14, default_a))
-        param_a_step = st.sidebar.number_input(f"F{idx + 1} Param A Step", 1, 10, 1)
-        param_b_min = st.sidebar.number_input(f"F{idx + 1} Param B Min", 1, 20, min(1, default_b))
-        param_b_max = st.sidebar.number_input(f"F{idx + 1} Param B Max", 1, 30, max(1, default_b))
-        param_b_step = st.sidebar.number_input(f"F{idx + 1} Param B Step", 1, 10, 1)
+        param_a_min = st.sidebar.number_input(
+            f"F{idx + 1} Param A Min",
+            2,
+            50,
+            min(14, default_a),
+            key=f"param_a_min_{idx}",
+        )
+        param_a_max = st.sidebar.number_input(
+            f"F{idx + 1} Param A Max",
+            2,
+            100,
+            max(14, default_a),
+            key=f"param_a_max_{idx}",
+        )
+        param_a_step = st.sidebar.number_input(
+            f"F{idx + 1} Param A Step",
+            1,
+            10,
+            1,
+            key=f"param_a_step_{idx}",
+        )
+        param_b_min = st.sidebar.number_input(
+            f"F{idx + 1} Param B Min",
+            1,
+            20,
+            min(1, default_b),
+            key=f"param_b_min_{idx}",
+        )
+        param_b_max = st.sidebar.number_input(
+            f"F{idx + 1} Param B Max",
+            1,
+            30,
+            max(1, default_b),
+            key=f"param_b_max_{idx}",
+        )
+        param_b_step = st.sidebar.number_input(
+            f"F{idx + 1} Param B Step",
+            1,
+            10,
+            1,
+            key=f"param_b_step_{idx}",
+        )
         feature_names.append(feature_name)
         param_ranges.append(
             {
@@ -264,12 +340,18 @@ def main() -> None:
         )
 
     if st.button("Run Optimization"):
+        if len(data) < train_window + test_window:
+            st.error("Not enough data for the selected training + test windows.")
+            return
         feature_grid = build_feature_grid(feature_names, param_ranges)
         if len(feature_grid) == 0:
             st.error("No feature combinations to test. Adjust parameter ranges.")
             return
 
-        st.write(f"Testing {len(feature_grid)} feature combinations per window.")
+        if max_combinations is not None:
+            st.write(f"Sampling {max_combinations} combinations per window from {len(feature_grid)} total.")
+        else:
+            st.write(f"Testing {len(feature_grid)} feature combinations per window.")
         result = walk_forward_optimize(
             data,
             settings,
@@ -279,9 +361,11 @@ def main() -> None:
             feature_grid,
             train_window=train_window,
             test_window=test_window,
+            max_combinations=max_combinations,
         )
 
         st.subheader("Walk-Forward Results")
+        st.caption(f"Data source: {data_source_label}")
         st.metric("Total Profit (units)", f"{result.profit:.2f}")
 
         if result.params:

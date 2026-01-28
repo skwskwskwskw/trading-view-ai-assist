@@ -16,7 +16,6 @@ from typing import Iterable, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
-import plotly.graph_objects as go
 import streamlit as st
 
 from lorentzian_classification import (
@@ -258,46 +257,13 @@ def render_ohlcv_chart(data: pd.DataFrame, data_source_label: str) -> None:
     st.subheader("OHLCV Overview")
     st.caption(f"Source: {data_source_label}")
     display_data = data[["time", "open", "high", "low", "close", "volume"]].dropna()
-    display_data["time_label"] = display_data["time"].dt.strftime("%Y-%m-%d %H:%M")
+    display_data = display_data.set_index("time")
 
-    candle_fig = go.Figure(
-        data=[
-            go.Candlestick(
-                x=display_data["time_label"],
-                open=display_data["open"],
-                high=display_data["high"],
-                low=display_data["low"],
-                close=display_data["close"],
-                name="OHLC",
-            )
-        ]
-    )
-    candle_fig.update_layout(
-        xaxis_title="Time",
-        yaxis_title="Price",
-        xaxis=dict(type="category", rangeslider=dict(visible=False)),
-        height=400,
-        margin=dict(l=20, r=20, t=30, b=20),
-    )
-    st.plotly_chart(candle_fig, use_container_width=True)
+    st.caption("Price (Open/High/Low/Close)")
+    st.line_chart(display_data[["open", "high", "low", "close"]])
 
-    volume_fig = go.Figure(
-        data=[
-            go.Bar(
-                x=display_data["time_label"],
-                y=display_data["volume"],
-                name="Volume",
-            )
-        ]
-    )
-    volume_fig.update_layout(
-        xaxis_title="Time",
-        yaxis_title="Volume",
-        xaxis=dict(type="category"),
-        height=250,
-        margin=dict(l=20, r=20, t=30, b=20),
-    )
-    st.plotly_chart(volume_fig, use_container_width=True)
+    st.caption("Volume")
+    st.bar_chart(display_data[["volume"]])
 
 
 def load_data(default_path: str) -> Tuple[pd.DataFrame, str]:

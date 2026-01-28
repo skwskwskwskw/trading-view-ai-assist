@@ -48,6 +48,7 @@ This folder contains TradingView Pine Script indicators that implement a Lorentz
 1. **Add to TradingView**
    - Open TradingView’s Pine Editor and paste the contents of `Machine Learning Lorentzian Classification.ps`.
    - Save and add to a chart.
+   - Ensure the imported libraries below are accessible in your TradingView account (the script imports them by namespace, not by local file path).
 2. **Configure General Settings**
    - Choose the input `Source`, neighbor count, max bars back, and feature count.
    - Decide if you want default exits or dynamic exits.
@@ -98,6 +99,30 @@ This folder contains TradingView Pine Script indicators that implement a Lorentz
 - The script tracks:
   - Rate-of-change based regime (bullish/bearish).
   - Crossovers between kernels for smoother transitions (if enabled).
+
+## Library dependencies (and what they do)
+
+`Machine Learning Lorentzian Classification.ps` imports two TradingView libraries by namespace. These libraries are the functional core of the indicator, so you must have access to them in your TradingView account to run the script.
+
+### `jdehorty/MLExtensions/2`
+Used for feature engineering, filters, color helpers, and backtest utilities:
+- **Feature normalization**: `n_rsi`, `n_wt` (WaveTrend Classic), `n_cci`, `n_adx` return normalized feature series used for ML inputs.
+- **Filters**:
+  - `filter_volatility` compares short- and long-window ATR to gate signals in low-volatility regimes.
+  - `regime_filter` estimates slope changes (Kaufman-like filtering) to avoid ranging conditions.
+  - `filter_adx` enforces a minimum ADX threshold to confirm trend strength.
+- **Display helpers**: `color_green` / `color_red` map prediction strength to shades for label/bar coloring.
+- **Trade stats**: `backtest` and `init_table` provide the rolling trade stats table shown when enabled.
+
+> Local reference: `MLExtensions.ps` in this folder mirrors the library implementation for review or modification outside TradingView.
+
+### `jdehorty/KernelFunctions/2`
+Provides non-repainting kernel regression functions used to build the trend filter:
+- **`rationalQuadratic`**: smooths price with a rational quadratic kernel (a weighted sum of Gaussians).
+- **`gaussian`**: provides a second kernel estimate used for crossover or smoothing logic.
+- Additional kernels (periodic, locally periodic) are included in the library but not used by this script.
+
+> Local reference: `KernelFunctions.ps` in this folder mirrors the library implementation for review or modification outside TradingView.
 
 ## 3. Logic to go long or short
 

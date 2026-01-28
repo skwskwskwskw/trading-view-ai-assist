@@ -371,6 +371,18 @@ def build_walk_forward_settings() -> Tuple[int, int, Optional[int], bool, int]:
     return train_window, test_window, max_combinations, use_parallel, max_workers
 
 
+def build_metrics_settings() -> bool:
+    st.sidebar.header("Metrics")
+    return st.sidebar.checkbox(
+        "Compute full-period profit with last best parameters",
+        value=True,
+        help=(
+            "Runs the strategy across the full CSV using the best parameters "
+            "from the final walk-forward window."
+        ),
+    )
+
+
 def build_feature_inputs(feature_count: int) -> Tuple[List[str], List[dict]]:
     st.sidebar.header("Feature Parameters (Auto-Optimized)")
     default_features = [
@@ -467,6 +479,7 @@ def run_optimization(
     max_combinations: Optional[int],
     use_parallel: bool,
     max_workers: int,
+    compute_full_profit: bool,
 ) -> None:
     if len(data) < train_window + test_window:
         st.error("Not enough data for the selected training + test windows.")
@@ -505,6 +518,18 @@ def run_optimization(
             st.write(f"Feature {idx}: {spec.name} (A={spec.param_a}, B={spec.param_b})")
         st.write(f"Training-window profit (last window): {result.params['train_profit']:.2f}")
 
+        if compute_full_profit:
+            full_result = run_strategy(
+                data,
+                settings,
+                filter_settings,
+                trend_filter_settings,
+                kernel_settings,
+                result.params["features"],
+            )
+            full_profit = evaluate_trades(full_result)
+            st.metric("Full-Period Profit (units)", f"{full_profit:.2f}")
+
     st.caption(
         "Optimization uses walk-forward windows. Each test window is evaluated only with parameters fitted "
         "on historical data preceding it, avoiding look-ahead bias."
@@ -524,6 +549,7 @@ def main() -> None:
     trend_filter_settings = build_trend_filter_settings()
     kernel_settings = build_kernel_settings()
     train_window, test_window, max_combinations, use_parallel, max_workers = build_walk_forward_settings()
+    compute_full_profit = build_metrics_settings()
     feature_names, param_ranges = build_feature_inputs(settings.feature_count)
 
     if st.button("Run Optimization"):
@@ -541,6 +567,7 @@ def main() -> None:
             max_combinations,
             use_parallel,
             max_workers,
+            compute_full_profit,
         )
 
 

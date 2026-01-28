@@ -151,3 +151,4 @@ A short trade can start when:
 - `MLExtensions.ps`, `KernelFunctions.ps`: Shared libraries.
 - `Backtest Adapter.ps`: Backtest adapter for signal streaming.
 - `python/lorentzian_classification.py`: Python port of the indicator logic (feature engineering, ANN, filters, kernel regression, entries/exits).
+- `python/run_app.py`: Streamlit app for uploading OHLCV data and running walk-forward parameter optimization.

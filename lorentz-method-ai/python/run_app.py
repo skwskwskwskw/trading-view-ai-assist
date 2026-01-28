@@ -10,11 +10,13 @@ from __future__ import annotations
 import itertools
 import os
 import random
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
-from typing import Iterable, List, Optional
+from typing import Iterable, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
+import plotly.graph_objects as go
 import streamlit as st
 
 from lorentzian_classification import (
@@ -107,36 +109,59 @@ def run_strategy(
     )
 
 
-def walk_forward_optimize(
-    data: pd.DataFrame,
+def _evaluate_feature_set(
+    args: Tuple[
+        pd.DataFrame,
+        Settings,
+        FilterSettings,
+        TrendFilterSettings,
+        KernelSettings,
+        List[FeatureSpec],
+    ]
+) -> Tuple[float, List[FeatureSpec]]:
+    train_data, settings, filter_settings, trend_filter_settings, kernel_settings, features = args
+    result = run_strategy(
+        train_data,
+        settings,
+        filter_settings,
+        trend_filter_settings,
+        kernel_settings,
+        features,
+    )
+    return evaluate_trades(result), features
+
+
+def evaluate_feature_sets(
+    train_data: pd.DataFrame,
     settings: Settings,
     filter_settings: FilterSettings,
     trend_filter_settings: TrendFilterSettings,
     kernel_settings: KernelSettings,
-    feature_grid: List[List[FeatureSpec]],
-    train_window: int,
-    test_window: int,
-    max_combinations: Optional[int] = None,
-) -> OptimizationResult:
-    total_profit = 0.0
-    best_params = None
-    start = 0
+    sampled_features: List[List[FeatureSpec]],
+    use_parallel: bool,
+    max_workers: int,
+) -> Tuple[float, Optional[List[FeatureSpec]]]:
+    best_train_profit = -np.inf
+    best_feature_set = None
 
-    while start + train_window + test_window <= len(data):
-        train_end = start + train_window
-        test_end = train_end + test_window
-
-        train_data = data.iloc[:train_end]
-        test_data = data.iloc[:test_end]
-
-        best_train_profit = -np.inf
-        best_feature_set = None
-
-        if max_combinations is not None and max_combinations < len(feature_grid):
-            sampled_features = random.sample(feature_grid, max_combinations)
-        else:
-            sampled_features = feature_grid
-
+    if use_parallel and max_workers > 1 and len(sampled_features) > 1:
+        with ProcessPoolExecutor(max_workers=max_workers) as executor:
+            args_iter = (
+                (
+                    train_data,
+                    settings,
+                    filter_settings,
+                    trend_filter_settings,
+                    kernel_settings,
+                    features,
+                )
+                for features in sampled_features
+            )
+            for profit, features in executor.map(_evaluate_feature_set, args_iter):
+                if profit > best_train_profit:
+                    best_train_profit = profit
+                    best_feature_set = features
+    else:
         for features in sampled_features:
             result = run_strategy(
                 train_data,
@@ -150,6 +175,49 @@ def walk_forward_optimize(
             if profit > best_train_profit:
                 best_train_profit = profit
                 best_feature_set = features
+
+    return best_train_profit, best_feature_set
+
+
+def walk_forward_optimize(
+    data: pd.DataFrame,
+    settings: Settings,
+    filter_settings: FilterSettings,
+    trend_filter_settings: TrendFilterSettings,
+    kernel_settings: KernelSettings,
+    feature_grid: List[List[FeatureSpec]],
+    train_window: int,
+    test_window: int,
+    max_combinations: Optional[int] = None,
+    use_parallel: bool = False,
+    max_workers: int = 1,
+) -> OptimizationResult:
+    total_profit = 0.0
+    best_params = None
+    start = 0
+
+    while start + train_window + test_window <= len(data):
+        train_end = start + train_window
+        test_end = train_end + test_window
+
+        train_data = data.iloc[:train_end]
+        test_data = data.iloc[:test_end]
+
+        if max_combinations is not None and max_combinations < len(feature_grid):
+            sampled_features = random.sample(feature_grid, max_combinations)
+        else:
+            sampled_features = feature_grid
+
+        best_train_profit, best_feature_set = evaluate_feature_sets(
+            train_data,
+            settings,
+            filter_settings,
+            trend_filter_settings,
+            kernel_settings,
+            sampled_features,
+            use_parallel=use_parallel,
+            max_workers=max_workers,
+        )
 
         if best_feature_set is None:
             break
@@ -186,11 +254,53 @@ def build_feature_grid(feature_names: List[str], param_ranges: List[dict]) -> Li
     return combos
 
 
-def main() -> None:
-    st.set_page_config(page_title="Lorentzian Classification", layout="wide")
-    st.title("Lorentzian Classification - Walk-Forward Optimizer")
+def render_ohlcv_chart(data: pd.DataFrame, data_source_label: str) -> None:
+    st.subheader("OHLCV Overview")
+    st.caption(f"Source: {data_source_label}")
+    display_data = data[["time", "open", "high", "low", "close", "volume"]].dropna()
+    display_data["time_label"] = display_data["time"].dt.strftime("%Y-%m-%d %H:%M")
 
-    default_path = os.path.join(os.path.dirname(__file__), DEFAULT_CSV_NAME)
+    candle_fig = go.Figure(
+        data=[
+            go.Candlestick(
+                x=display_data["time_label"],
+                open=display_data["open"],
+                high=display_data["high"],
+                low=display_data["low"],
+                close=display_data["close"],
+                name="OHLC",
+            )
+        ]
+    )
+    candle_fig.update_layout(
+        xaxis_title="Time",
+        yaxis_title="Price",
+        xaxis=dict(type="category", rangeslider=dict(visible=False)),
+        height=400,
+        margin=dict(l=20, r=20, t=30, b=20),
+    )
+    st.plotly_chart(candle_fig, use_container_width=True)
+
+    volume_fig = go.Figure(
+        data=[
+            go.Bar(
+                x=display_data["time_label"],
+                y=display_data["volume"],
+                name="Volume",
+            )
+        ]
+    )
+    volume_fig.update_layout(
+        xaxis_title="Time",
+        yaxis_title="Volume",
+        xaxis=dict(type="category"),
+        height=250,
+        margin=dict(l=20, r=20, t=30, b=20),
+    )
+    st.plotly_chart(volume_fig, use_container_width=True)
+
+
+def load_data(default_path: str) -> Tuple[pd.DataFrame, str]:
     uploaded = st.file_uploader(
         "Upload OHLCV CSV (optional)",
         type=["csv"],
@@ -209,13 +319,16 @@ def main() -> None:
             data = load_ohlcv(csv_file=uploaded)
         else:
             st.error(f"Default file not found at {default_path}. Upload a CSV to continue.")
-            return
+            st.stop()
     except ValueError as exc:
         st.error(str(exc))
-        return
+        st.stop()
+    return data, data_source_label
 
+
+def build_general_settings() -> Settings:
     st.sidebar.header("General Settings")
-    settings = Settings(
+    return Settings(
         source=st.sidebar.selectbox("Source", ["close", "open", "high", "low"], index=0),
         neighbors_count=st.sidebar.slider("Neighbors Count", 1, 25, 8),
         max_bars_back=st.sidebar.slider("Max Bars Back", 200, 5000, 2000),
@@ -225,8 +338,10 @@ def main() -> None:
         use_dynamic_exits=st.sidebar.checkbox("Use Dynamic Exits", value=False),
     )
 
+
+def build_filter_settings() -> FilterSettings:
     st.sidebar.header("Filter Settings")
-    filter_settings = FilterSettings(
+    return FilterSettings(
         use_volatility_filter=st.sidebar.checkbox("Use Volatility Filter", value=True),
         use_regime_filter=st.sidebar.checkbox("Use Regime Filter", value=True),
         use_adx_filter=st.sidebar.checkbox("Use ADX Filter", value=False),
@@ -234,16 +349,20 @@ def main() -> None:
         adx_threshold=st.sidebar.slider("ADX Threshold", 0, 100, 20),
     )
 
+
+def build_trend_filter_settings() -> TrendFilterSettings:
     st.sidebar.header("Trend Filters")
-    trend_filter_settings = TrendFilterSettings(
+    return TrendFilterSettings(
         use_ema_filter=st.sidebar.checkbox("Use EMA Filter", value=False),
         ema_period=st.sidebar.slider("EMA Period", 1, 400, 200),
         use_sma_filter=st.sidebar.checkbox("Use SMA Filter", value=False),
         sma_period=st.sidebar.slider("SMA Period", 1, 400, 200),
     )
 
+
+def build_kernel_settings() -> KernelSettings:
     st.sidebar.header("Kernel Settings")
-    kernel_settings = KernelSettings(
+    return KernelSettings(
         use_kernel_filter=st.sidebar.checkbox("Use Kernel Filter", value=True),
         use_kernel_smoothing=st.sidebar.checkbox("Use Kernel Smoothing", value=False),
         lookback_window=st.sidebar.slider("Kernel Lookback Window", 3, 50, 8),
@@ -252,6 +371,8 @@ def main() -> None:
         lag=st.sidebar.slider("Kernel Lag", 1, 2, 2),
     )
 
+
+def build_walk_forward_settings() -> Tuple[int, int, Optional[int], bool, int]:
     st.sidebar.header("Walk-Forward Settings")
     train_window = st.sidebar.slider("Training Window (bars)", 200, 3000, 1000, 50)
     test_window = st.sidebar.slider("Test Window (bars)", 50, 1000, 250, 25)
@@ -260,6 +381,31 @@ def main() -> None:
     if optimizer_mode == "Random Search":
         max_combinations = st.sidebar.number_input("Random Samples per Window", 10, 5000, 200)
 
+    st.sidebar.subheader("Parallel Feature Evaluation")
+    cpu_hint = max(os.cpu_count() or 1, 1)
+    recommended_max = min(cpu_hint, 2)
+    use_parallel = st.sidebar.checkbox(
+        "Enable parallel evaluation",
+        value=False,
+        help=(
+            "Parallelization can speed up feature grid evaluation. "
+            "Keep workers low on Streamlit free tiers (typically 1-2 cores)."
+        ),
+    )
+    max_workers = st.sidebar.slider(
+        "Max workers",
+        1,
+        max(1, recommended_max),
+        recommended_max,
+        help=(
+            f"Detected CPU cores: {cpu_hint}. "
+            f"Recommended max for Streamlit free tiers: {recommended_max}."
+        ),
+    )
+    return train_window, test_window, max_combinations, use_parallel, max_workers
+
+
+def build_feature_inputs(feature_count: int) -> Tuple[List[str], List[dict]]:
     st.sidebar.header("Feature Parameters (Auto-Optimized)")
     default_features = [
         ("RSI", 14, 1),
@@ -276,7 +422,7 @@ def main() -> None:
 
     feature_names = []
     param_ranges = []
-    for idx in range(settings.feature_count):
+    for idx in range(feature_count):
         name, default_a, default_b = default_features[idx]
         st.sidebar.subheader(f"Feature {idx + 1}")
         feature_name = st.sidebar.selectbox(
@@ -338,45 +484,97 @@ def main() -> None:
                 "param_b_step": int(param_b_step),
             }
         )
+    return feature_names, param_ranges
+
+
+def run_optimization(
+    data: pd.DataFrame,
+    data_source_label: str,
+    settings: Settings,
+    filter_settings: FilterSettings,
+    trend_filter_settings: TrendFilterSettings,
+    kernel_settings: KernelSettings,
+    feature_names: List[str],
+    param_ranges: List[dict],
+    train_window: int,
+    test_window: int,
+    max_combinations: Optional[int],
+    use_parallel: bool,
+    max_workers: int,
+) -> None:
+    if len(data) < train_window + test_window:
+        st.error("Not enough data for the selected training + test windows.")
+        return
+    feature_grid = build_feature_grid(feature_names, param_ranges)
+    if len(feature_grid) == 0:
+        st.error("No feature combinations to test. Adjust parameter ranges.")
+        return
+
+    if max_combinations is not None:
+        st.write(f"Sampling {max_combinations} combinations per window from {len(feature_grid)} total.")
+    else:
+        st.write(f"Testing {len(feature_grid)} feature combinations per window.")
+
+    result = walk_forward_optimize(
+        data,
+        settings,
+        filter_settings,
+        trend_filter_settings,
+        kernel_settings,
+        feature_grid,
+        train_window=train_window,
+        test_window=test_window,
+        max_combinations=max_combinations,
+        use_parallel=use_parallel,
+        max_workers=max_workers,
+    )
+
+    st.subheader("Walk-Forward Results")
+    st.caption(f"Data source: {data_source_label}")
+    st.metric("Total Profit (units)", f"{result.profit:.2f}")
+
+    if result.params:
+        st.write("Best parameters from the last window:")
+        for idx, spec in enumerate(result.params["features"], start=1):
+            st.write(f"Feature {idx}: {spec.name} (A={spec.param_a}, B={spec.param_b})")
+        st.write(f"Training-window profit (last window): {result.params['train_profit']:.2f}")
+
+    st.caption(
+        "Optimization uses walk-forward windows. Each test window is evaluated only with parameters fitted "
+        "on historical data preceding it, avoiding look-ahead bias."
+    )
+
+
+def main() -> None:
+    st.set_page_config(page_title="Lorentzian Classification", layout="wide")
+    st.title("Lorentzian Classification - Walk-Forward Optimizer")
+
+    default_path = os.path.join(os.path.dirname(__file__), DEFAULT_CSV_NAME)
+    data, data_source_label = load_data(default_path)
+    render_ohlcv_chart(data, data_source_label)
+
+    settings = build_general_settings()
+    filter_settings = build_filter_settings()
+    trend_filter_settings = build_trend_filter_settings()
+    kernel_settings = build_kernel_settings()
+    train_window, test_window, max_combinations, use_parallel, max_workers = build_walk_forward_settings()
+    feature_names, param_ranges = build_feature_inputs(settings.feature_count)
 
     if st.button("Run Optimization"):
-        if len(data) < train_window + test_window:
-            st.error("Not enough data for the selected training + test windows.")
-            return
-        feature_grid = build_feature_grid(feature_names, param_ranges)
-        if len(feature_grid) == 0:
-            st.error("No feature combinations to test. Adjust parameter ranges.")
-            return
-
-        if max_combinations is not None:
-            st.write(f"Sampling {max_combinations} combinations per window from {len(feature_grid)} total.")
-        else:
-            st.write(f"Testing {len(feature_grid)} feature combinations per window.")
-        result = walk_forward_optimize(
+        run_optimization(
             data,
+            data_source_label,
             settings,
             filter_settings,
             trend_filter_settings,
             kernel_settings,
-            feature_grid,
-            train_window=train_window,
-            test_window=test_window,
-            max_combinations=max_combinations,
-        )
-
-        st.subheader("Walk-Forward Results")
-        st.caption(f"Data source: {data_source_label}")
-        st.metric("Total Profit (units)", f"{result.profit:.2f}")
-
-        if result.params:
-            st.write("Best parameters from the last window:")
-            for idx, spec in enumerate(result.params["features"], start=1):
-                st.write(f"Feature {idx}: {spec.name} (A={spec.param_a}, B={spec.param_b})")
-            st.write(f"Training-window profit (last window): {result.params['train_profit']:.2f}")
-
-        st.caption(
-            "Optimization uses walk-forward windows. Each test window is evaluated only with parameters fitted "
-            "on historical data preceding it, avoiding look-ahead bias."
+            feature_names,
+            param_ranges,
+            train_window,
+            test_window,
+            max_combinations,
+            use_parallel,
+            max_workers,
         )
 
 

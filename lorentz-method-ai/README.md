@@ -150,3 +150,4 @@ A short trade can start when:
 - `Lorentzian-KNN-strategy-AI.ps`: Related strategy script.
 - `MLExtensions.ps`, `KernelFunctions.ps`: Shared libraries.
 - `Backtest Adapter.ps`: Backtest adapter for signal streaming.
+- `python/lorentzian_classification.py`: Python port of the indicator logic (feature engineering, ANN, filters, kernel regression, entries/exits).

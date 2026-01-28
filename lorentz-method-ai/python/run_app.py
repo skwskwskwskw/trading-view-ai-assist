@@ -16,6 +16,7 @@ from typing import Iterable, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
+import plotly.graph_objects as go
 import streamlit as st
 
 from lorentzian_classification import (
@@ -256,9 +257,47 @@ def build_feature_grid(feature_names: List[str], param_ranges: List[dict]) -> Li
 def render_ohlcv_chart(data: pd.DataFrame, data_source_label: str) -> None:
     st.subheader("OHLCV Overview")
     st.caption(f"Source: {data_source_label}")
-    chart_data = data.set_index("time")[["open", "high", "low", "close"]]
-    st.line_chart(chart_data, height=300)
-    st.bar_chart(data.set_index("time")[["volume"]], height=200)
+    display_data = data[["time", "open", "high", "low", "close", "volume"]].dropna()
+    display_data["time_label"] = display_data["time"].dt.strftime("%Y-%m-%d %H:%M")
+
+    candle_fig = go.Figure(
+        data=[
+            go.Candlestick(
+                x=display_data["time_label"],
+                open=display_data["open"],
+                high=display_data["high"],
+                low=display_data["low"],
+                close=display_data["close"],
+                name="OHLC",
+            )
+        ]
+    )
+    candle_fig.update_layout(
+        xaxis_title="Time",
+        yaxis_title="Price",
+        xaxis=dict(type="category", rangeslider=dict(visible=False)),
+        height=400,
+        margin=dict(l=20, r=20, t=30, b=20),
+    )
+    st.plotly_chart(candle_fig, use_container_width=True)
+
+    volume_fig = go.Figure(
+        data=[
+            go.Bar(
+                x=display_data["time_label"],
+                y=display_data["volume"],
+                name="Volume",
+            )
+        ]
+    )
+    volume_fig.update_layout(
+        xaxis_title="Time",
+        yaxis_title="Volume",
+        xaxis=dict(type="category"),
+        height=250,
+        margin=dict(l=20, r=20, t=30, b=20),
+    )
+    st.plotly_chart(volume_fig, use_container_width=True)
 
 
 def load_data(default_path: str) -> Tuple[pd.DataFrame, str]:
@@ -344,7 +383,7 @@ def build_walk_forward_settings() -> Tuple[int, int, Optional[int], bool, int]:
 
     st.sidebar.subheader("Parallel Feature Evaluation")
     cpu_hint = max(os.cpu_count() or 1, 1)
-    recommended_max = min(cpu_hint, 4)
+    recommended_max = min(cpu_hint, 2)
     use_parallel = st.sidebar.checkbox(
         "Enable parallel evaluation",
         value=False,
@@ -357,8 +396,11 @@ def build_walk_forward_settings() -> Tuple[int, int, Optional[int], bool, int]:
         "Max workers",
         1,
         max(1, recommended_max),
-        min(2, recommended_max),
-        help=f"Detected CPU cores: {cpu_hint}. Recommended max: {recommended_max}.",
+        recommended_max,
+        help=(
+            f"Detected CPU cores: {cpu_hint}. "
+            f"Recommended max for Streamlit free tiers: {recommended_max}."
+        ),
     )
     return train_window, test_window, max_combinations, use_parallel, max_workers
 

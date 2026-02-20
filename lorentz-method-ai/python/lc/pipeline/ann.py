@@ -96,6 +96,8 @@ def run_ann(df: pd.DataFrame, feature_columns: Sequence[str], cfg: ANNConfig) ->
     predictions = np.zeros(len(out), dtype=float)
     signal = np.zeros(len(out), dtype=int)
     max_bars_back_index = max(len(out) - cfg.max_bars_back, 0)
+    neighbor_predictions: list[int] = []
+    neighbor_distances: list[float] = []
 
     for bar in range(len(out)):
         if bar > 0:
@@ -103,8 +105,6 @@ def run_ann(df: pd.DataFrame, feature_columns: Sequence[str], cfg: ANNConfig) ->
         if bar < max_bars_back_index:
             continue
         last_distance = -1.0
-        pred_list: list[int] = []
-        dist_list: list[float] = []
         size_loop = min(cfg.max_bars_back - 1, bar)
         for i in range(size_loop + 1):
             if i % 4 == 0:
@@ -112,14 +112,14 @@ def run_ann(df: pd.DataFrame, feature_columns: Sequence[str], cfg: ANNConfig) ->
             d = lorentzian_distance(feat_mat[bar], feat_mat[i])
             if d >= last_distance:
                 last_distance = d
-                dist_list.append(d)
-                pred_list.append(int(round(y_train[i])))
-                if len(pred_list) > cfg.neighbors_count:
+                neighbor_distances.append(d)
+                neighbor_predictions.append(int(round(y_train[i])))
+                if len(neighbor_predictions) > cfg.neighbors_count:
                     idx = int(round(cfg.neighbors_count * 3 / 4))
-                    last_distance = dist_list[idx]
-                    dist_list.pop(0)
-                    pred_list.pop(0)
-        predictions[bar] = float(np.sum(pred_list)) if pred_list else 0.0
+                    last_distance = neighbor_distances[idx]
+                    neighbor_distances.pop(0)
+                    neighbor_predictions.pop(0)
+        predictions[bar] = float(np.sum(neighbor_predictions)) if neighbor_predictions else 0.0
 
     vol_f = _volatility_filter(out, cfg.use_volatility_filter)
     reg_f = _regime_filter(out, cfg.regime_threshold, cfg.use_regime_filter)

@@ -10,12 +10,12 @@ python main.py --csv "MYX_FCPO1!, 5.csv" --out predictions.csv
 
 Input CSV must include exactly these columns:
 
-- `time`
+- `time` (unix seconds/milliseconds or ISO string)
 - `open`
 - `high`
 - `low`
 - `close`
-- `Volume`
+- `Volume` (or `volume`)
 
 ## Architecture
 

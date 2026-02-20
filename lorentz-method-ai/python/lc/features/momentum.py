@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
 from ..ta_primitives import ema, normalize, rescale, rma, sma
@@ -13,7 +14,7 @@ def _n_rsi(close: pd.Series, length: int, smooth: int) -> pd.Series:
     loss = -delta.where(delta < 0, 0.0)
     avg_gain = rma(gain, length)
     avg_loss = rma(loss, length)
-    rs = avg_gain / avg_loss.replace(0, pd.NA)
+    rs = avg_gain / avg_loss.replace(0, np.nan)
     rsi = 100 - (100 / (1 + rs))
     return rescale(ema(rsi, smooth), 0, 100, 0, 1)
 
@@ -21,14 +22,14 @@ def _n_rsi(close: pd.Series, length: int, smooth: int) -> pd.Series:
 def _n_cci(close: pd.Series, length: int, smooth: int) -> pd.Series:
     ma = sma(close, length)
     mad = (close - ma).abs().rolling(length, min_periods=1).mean()
-    cci = (close - ma) / (0.015 * mad.replace(0, pd.NA))
+    cci = (close - ma) / (0.015 * mad.replace(0, np.nan))
     return normalize(ema(cci, smooth), 0, 1)
 
 
 def _n_wt(hlc3: pd.Series, n1: int, n2: int) -> pd.Series:
     esa = ema(hlc3, n1)
     d = ema((hlc3 - esa).abs(), n1)
-    ci = (hlc3 - esa) / (0.015 * d.replace(0, pd.NA))
+    ci = (hlc3 - esa) / (0.015 * d.replace(0, np.nan))
     wt1 = ema(ci, n2)
     wt2 = sma(wt1, 4)
     return normalize(wt1 - wt2, 0, 1)
@@ -41,9 +42,9 @@ def _n_adx(high: pd.Series, low: pd.Series, close: pd.Series, length: int) -> pd
     tr_s = rma(tr, length)
     plus_s = rma(plus_dm, length)
     minus_s = rma(minus_dm, length)
-    di_plus = plus_s / tr_s.replace(0, pd.NA) * 100
-    di_minus = minus_s / tr_s.replace(0, pd.NA) * 100
-    dx = (di_plus - di_minus).abs() / (di_plus + di_minus).replace(0, pd.NA) * 100
+    di_plus = plus_s / tr_s.replace(0, np.nan) * 100
+    di_minus = minus_s / tr_s.replace(0, np.nan) * 100
+    dx = (di_plus - di_minus).abs() / (di_plus + di_minus).replace(0, np.nan) * 100
     return rescale(rma(dx, length), 0, 100, 0, 1)
 
 

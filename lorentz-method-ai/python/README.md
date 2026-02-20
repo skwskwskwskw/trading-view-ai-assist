@@ -76,3 +76,18 @@ Returned summary fields:
 - `win_to_lose_ratio`: winners / losers (`inf` when there are winners and no losses).
 - Signal ordering is **close first, then open** on each bar, so same-bar flips are counted correctly.
 
+
+## Pine strategy parity runner
+
+To mirror the strategy in `Lorentzian-KNN-strategy-AI.ps`, run:
+
+```bash
+python parity_runner.py --csv "MYX_FCPO1!, 5.csv" --outdir parity_out
+```
+
+This writes:
+- `python_signal_trace.csv` (per-bar entry/exit/stop/TP/trailing flags)
+- `python_trade_ledger.csv` (entry/exit timestamps/prices + reason)
+- optional `trace_mismatch.csv` when Pine trace is supplied
+
+See `PARITY_NOTES.md` for the Pine→Python mapping and parity assumptions.

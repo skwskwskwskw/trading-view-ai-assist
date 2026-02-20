@@ -16,13 +16,14 @@ def rma(series: pd.Series, length: int) -> pd.Series:
     # Pine Script ta.rma behaves like EMA but alpha = 1/length instead of 2/(length+1),
     # AND it initializes with an SMA of the given length.
     alpha = 1 / length
-    sma = series.rolling(window=length, min_periods=length).mean()
+    sma_vals = series.rolling(window=length, min_periods=length).mean().to_numpy()
+    series_vals = series.to_numpy()
     out = np.full(len(series), np.nan)
     for i in range(len(series)):
-        if not pd.isna(sma.iloc[i]) and pd.isna(out[i-1]):
-            out[i] = sma.iloc[i]
-        elif i > 0 and not pd.isna(out[i-1]):
-            out[i] = alpha * series.iloc[i] + (1 - alpha) * out[i-1]
+        if not np.isnan(sma_vals[i]) and np.isnan(out[i-1]):
+            out[i] = sma_vals[i]
+        elif i > 0 and not np.isnan(out[i-1]):
+            out[i] = alpha * series_vals[i] + (1 - alpha) * out[i-1]
     return pd.Series(out, index=series.index)
 
 

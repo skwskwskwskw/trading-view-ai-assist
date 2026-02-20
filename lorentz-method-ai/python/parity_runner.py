@@ -19,6 +19,32 @@ def _compare_bool_trace(py: pd.DataFrame, pine: pd.DataFrame, cols: list[str]) -
     return pd.DataFrame(out)
 
 
+def _compare_trade_ledger(py: pd.DataFrame, pine: pd.DataFrame) -> pd.DataFrame:
+    cols = ["entry_time", "exit_time", "direction"]
+    left = py.copy()
+    right = pine.copy()
+    for c in ("entry_time", "exit_time"):
+        left[c] = pd.to_datetime(left[c], utc=True, errors="coerce")
+        right[c] = pd.to_datetime(right[c], utc=True, errors="coerce")
+
+    diffs = []
+    n = max(len(left), len(right))
+    for i in range(n):
+        if i >= len(left):
+            diffs.append({"trade_index": i, "column": "missing_python", "python": None, "pine": "present"})
+            continue
+        if i >= len(right):
+            diffs.append({"trade_index": i, "column": "missing_pine", "python": "present", "pine": None})
+            continue
+        for c in cols:
+            pv = left.iloc[i][c]
+            tv = right.iloc[i][c]
+            if str(pv) != str(tv):
+                diffs.append({"trade_index": i, "column": c, "python": pv, "pine": tv})
+                break
+    return pd.DataFrame(diffs)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Parity runner for Lorentzian-KNN-strategy-AI.ps")
     ap.add_argument("--csv", required=True)
@@ -65,6 +91,19 @@ def main() -> None:
             print("Trade count parity: PASS")
         else:
             print("Trade count parity: FAIL")
+        trade_diff = _compare_trade_ledger(ledger, pine_trades)
+        trade_diff_path = outdir / "trade_mismatch.csv"
+        trade_diff.to_csv(trade_diff_path, index=False)
+        if trade_diff.empty:
+            print("Trade event parity: PASS")
+        else:
+            first = trade_diff.iloc[0]
+            print(
+                "Trade event parity: FAIL. "
+                f"First divergence trade #{first['trade_index']} "
+                f"col={first['column']} py={first['python']} pine={first['pine']}"
+            )
+            print(f"Mismatch report: {trade_diff_path}")
 
 
 if __name__ == "__main__":

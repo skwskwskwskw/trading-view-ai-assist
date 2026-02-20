@@ -45,3 +45,25 @@ def test_trade_metrics_handles_losses_and_drawdown() -> None:
     assert summary.max_drawdown == 12.0
     assert round(summary.win_rate_pct, 2) == 33.33
     assert summary.win_to_lose_ratio == 0.5
+
+
+def test_trade_metrics_counts_same_bar_flip_events() -> None:
+    # close+open on the same bar should count as two distinct trade events.
+    df = pd.DataFrame(
+        {
+            "close": [100, 102, 101, 99, 98, 97],
+            "start_long": [True, False, False, True, False, False],
+            "end_long": [False, True, False, False, False, True],
+            "start_short": [False, True, False, False, False, False],
+            "end_short": [False, False, True, False, False, False],
+        }
+    )
+
+    trades, summary = evaluate_trades_with_metrics(df)
+
+    # 1) long 100->102 (+2), then same-bar open short at 102
+    # 2) short 102->101 (+1)
+    # 3) long 99->97 (-2)
+    assert len(trades) == 3
+    assert trades["pnl"].tolist() == [2.0, 1.0, -2.0]
+    assert summary.total_pnl == 1.0

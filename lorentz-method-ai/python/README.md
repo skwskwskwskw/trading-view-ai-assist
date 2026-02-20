@@ -74,4 +74,5 @@ Returned summary fields:
 - `max_drawdown`: maximum peak-to-trough loss on cumulative trade P&L.
 - `win_rate_pct`: percentage of winning trades.
 - `win_to_lose_ratio`: winners / losers (`inf` when there are winners and no losses).
+- Signal ordering is **close first, then open** on each bar, so same-bar flips are counted correctly.
 

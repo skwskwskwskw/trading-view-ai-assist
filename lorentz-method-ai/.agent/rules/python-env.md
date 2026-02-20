@@ -1,0 +1,1 @@
+When executing Python commands, ALWAYS use the interpreter located at: `/home/simkwongwui/uvpy310/.venv/bin/python`.

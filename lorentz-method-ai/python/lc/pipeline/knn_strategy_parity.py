@@ -6,7 +6,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from ..ta_primitives import atr, ema, rescale
+from .ta_primitives import atr, ema, rescale
 
 
 @dataclass
@@ -39,7 +39,8 @@ def _rsi(close: pd.Series, length: int) -> pd.Series:
 
 def _normalize_deriv(src: pd.Series, length: int) -> pd.Series:
     deriv = src - src.shift(2)
-    qmean = np.sqrt((deriv.pow(2)).rolling(length, min_periods=1).sum() / length)
+    # Pine's math.sum returns na until 'length' values exist
+    qmean = np.sqrt((deriv.pow(2)).rolling(length).sum() / length)
     return deriv / qmean.replace(0, np.nan)
 
 
@@ -80,6 +81,7 @@ def _ann_knn_predict(current: np.ndarray, feats: list[np.ndarray], labels: list[
     if not dists:
         return np.nan
     dists.sort(key=lambda x: x[0])
+    # Ignore type checking on list comprehension packing to avoid slice inference issues
     return float(np.sum([lbl for _, lbl in dists[:k]]))
 
 
@@ -114,6 +116,17 @@ def run_knn_parity(df: pd.DataFrame, cfg: KNNParityConfig) -> tuple[pd.DataFrame
 
     for i in range(len(out)):
         fvec = np.array([out["norm_der"].iloc[i], out["rsi_n"].iloc[i], out["mom_n"].iloc[i], out["gauss_sm"].iloc[i], out["atr_ratio"].iloc[i]], dtype=float)
+
+        # Pine Script lookahead flaw: barstate.isconfirmed array.push happens before prediction step!
+        # This gives the model access to the current bar's label at 0 distance.
+        if np.isfinite(fvec).all():
+            label = 1.0 if (close.iloc[i] - close.iloc[i-1] if i > 0 else 0) > 0 else -1.0
+            if len(feat_hist) >= cfg.train_size:
+                feat_hist.pop(0)
+                class_hist.pop(0)
+            feat_hist.append(fvec)
+            class_hist.append(label)
+
         if np.isfinite(fvec).all() and len(feat_hist) >= cfg.k_neighbours:
             prediction[i] = _ann_knn_predict(fvec, feat_hist, class_hist, cfg.k_neighbours)
 
@@ -131,17 +144,34 @@ def run_knn_parity(df: pd.DataFrame, cfg: KNNParityConfig) -> tuple[pd.DataFrame
         trail_hit = False
         exit_reason = None
 
-        # Simulate resting exits first (intrabar), then next entries on close.
+        # Simulate resting exits first (intrabar)
         if position != 0:
             h = high.iloc[i]
             l = low.iloc[i]
+            
+            # Pine trailing stop (with trail_points only, offset defaults to trail_points if omitted, or sometimes it's undefined. 
+            # In Pine strategy.exit, if trail_offset is unspecified it trails by trail_points distance.
+            # Activation happens when profit >= trail_points.
             if position > 0:
+                # LONG EXIT logic
                 if cfg.use_trail:
-                    trail_anchor = max(trail_anchor, h)
-                    trail_price = trail_anchor - cfg.atr_stop_mult * out["atr"].iloc[i]
-                effective_stop = np.nanmax([stop_price, trail_price]) if cfg.use_trail else stop_price
+                    # trail_points in ticks. Activation price:
+                    trail_activation = entry_price + cfg.atr_stop_mult * out["atr"].iloc[i]
+                    if h >= trail_activation:
+                        if pd.isna(trail_anchor):
+                            trail_anchor = h
+                        else:
+                            trail_anchor = max(trail_anchor, h)
+                        # The trailing stop price is anchor - offset. Assuming offset = trail_points = 1.5 * atr
+                        trail_price = trail_anchor - cfg.atr_stop_mult * out["atr"].iloc[i]
+
+                effective_stop = stop_price
+                if cfg.use_trail and not pd.isna(trail_price):
+                   effective_stop = np.nanmax([stop_price, trail_price])
+                   
                 hit_stop = np.isfinite(effective_stop) and l <= effective_stop
                 hit_tp = np.isfinite(tp_price) and h >= tp_price
+                
                 if hit_stop or hit_tp:
                     if hit_stop and hit_tp:
                         d_stop = abs(opn.iloc[i] - effective_stop)
@@ -150,7 +180,13 @@ def run_knn_parity(df: pd.DataFrame, cfg: KNNParityConfig) -> tuple[pd.DataFrame
                             hit_tp = False
                         else:
                             hit_stop = False
-                    px = effective_stop if hit_stop else tp_price
+                    
+                    # Fill price depends on gap open
+                    if hit_stop:
+                        px = min(opn.iloc[i], effective_stop)
+                    else:
+                        px = max(opn.iloc[i], tp_price)
+                        
                     exit_long = True
                     stop_hit = bool(hit_stop)
                     trail_hit = bool(hit_stop and cfg.use_trail and np.isfinite(trail_price) and effective_stop == trail_price)
@@ -158,13 +194,27 @@ def run_knn_parity(df: pd.DataFrame, cfg: KNNParityConfig) -> tuple[pd.DataFrame
                     exit_reason = "trail" if trail_hit else ("sl" if hit_stop else "tp")
                     trades.append({"entry_time": entry_time, "entry_price": entry_price, "exit_time": out.index[i], "exit_price": px, "direction": "long", "reason": exit_reason})
                     position = 0
+                    
             else:
+                # SHORT EXIT logic
                 if cfg.use_trail:
-                    trail_anchor = min(trail_anchor, l)
-                    trail_price = trail_anchor + cfg.atr_stop_mult * out["atr"].iloc[i]
-                effective_stop = np.nanmin([stop_price, trail_price]) if cfg.use_trail else stop_price
+                    # trail_points in ticks. Activation price:
+                    trail_activation = entry_price - cfg.atr_stop_mult * out["atr"].iloc[i]
+                    if l <= trail_activation:
+                        if pd.isna(trail_anchor):
+                            trail_anchor = l
+                        else:
+                            trail_anchor = min(trail_anchor, l)
+                        # The trailing stop price is anchor + offset
+                        trail_price = trail_anchor + cfg.atr_stop_mult * out["atr"].iloc[i]
+
+                effective_stop = stop_price
+                if cfg.use_trail and not pd.isna(trail_price):
+                   effective_stop = np.nanmin([stop_price, trail_price])
+                   
                 hit_stop = np.isfinite(effective_stop) and h >= effective_stop
                 hit_tp = np.isfinite(tp_price) and l <= tp_price
+                
                 if hit_stop or hit_tp:
                     if hit_stop and hit_tp:
                         d_stop = abs(opn.iloc[i] - effective_stop)
@@ -173,7 +223,13 @@ def run_knn_parity(df: pd.DataFrame, cfg: KNNParityConfig) -> tuple[pd.DataFrame
                             hit_tp = False
                         else:
                             hit_stop = False
-                    px = effective_stop if hit_stop else tp_price
+                            
+                    # Fill price depends on gap open
+                    if hit_stop:
+                        px = max(opn.iloc[i], effective_stop)
+                    else:
+                        px = min(opn.iloc[i], tp_price)
+                        
                     exit_short = True
                     stop_hit = bool(hit_stop)
                     trail_hit = bool(hit_stop and cfg.use_trail and np.isfinite(trail_price) and effective_stop == trail_price)
@@ -182,25 +238,30 @@ def run_knn_parity(df: pd.DataFrame, cfg: KNNParityConfig) -> tuple[pd.DataFrame
                     trades.append({"entry_time": entry_time, "entry_price": entry_price, "exit_time": out.index[i], "exit_price": px, "direction": "short", "reason": exit_reason})
                     position = 0
 
-        if position == 0:
+        # Simulate next entries on close (actually filled at next open, but we record decision state here).
+        # We assume if the condition triggers on bar i, the actual fill is opn.iloc[i+1].
+        # If we are at the last bar, we can't fill.
+        if position == 0 and i < len(out) - 1:
             if long_ok:
                 position = 1
                 entry_long = True
-                entry_price = close.iloc[i]
-                entry_time = out.index[i]
-                stop_price = close.iloc[i] - cfg.atr_stop_mult * out["atr"].iloc[i]
-                tp_price = close.iloc[i] + cfg.atr_target_mult * out["atr"].iloc[i]
-                trail_anchor = high.iloc[i]
-                trail_price = trail_anchor - cfg.atr_stop_mult * out["atr"].iloc[i]
+                # Execution happens at the OPEN of the NEXT bar
+                entry_price = opn.iloc[i + 1]
+                entry_time = out.index[i + 1]
+                # Stops are calculated relative to entry price in Pine when using strategy.exit
+                stop_price = entry_price - cfg.atr_stop_mult * out["atr"].iloc[i]
+                tp_price = entry_price + cfg.atr_target_mult * out["atr"].iloc[i]
+                trail_anchor = np.nan
+                trail_price = np.nan
             elif short_ok:
                 position = -1
                 entry_short = True
-                entry_price = close.iloc[i]
-                entry_time = out.index[i]
-                stop_price = close.iloc[i] + cfg.atr_stop_mult * out["atr"].iloc[i]
-                tp_price = close.iloc[i] - cfg.atr_target_mult * out["atr"].iloc[i]
-                trail_anchor = low.iloc[i]
-                trail_price = trail_anchor + cfg.atr_stop_mult * out["atr"].iloc[i]
+                entry_price = opn.iloc[i + 1]
+                entry_time = out.index[i + 1]
+                stop_price = entry_price + cfg.atr_stop_mult * out["atr"].iloc[i]
+                tp_price = entry_price - cfg.atr_target_mult * out["atr"].iloc[i]
+                trail_anchor = np.nan
+                trail_price = np.nan
 
         # Pine barstate.isconfirmed: push this closed bar feature + label for future bars.
         if np.isfinite(fvec).all():

@@ -55,3 +55,23 @@ Tests cover feature shape and no-lookahead sanity checks.
   - Signal/entry/exit logic -> `lc/pipeline/ann.py`
 - `Backtest Adapter.ps`:
   - Stream-compatible outputs (`start_long`, `end_long`, `start_short`, `end_short`) -> `lc/pipeline/ann.py`
+
+
+## Trade outcome metrics (no fees)
+
+Given pipeline output columns (`close`, `start_long`, `end_long`, `start_short`, `end_short`), you can compute per-trade outcomes and summary metrics:
+
+```python
+from lc.pipeline.trade_metrics import evaluate_trades_with_metrics
+
+trades, summary = evaluate_trades_with_metrics(predictions_df)
+print(trades[["side", "entry_price", "exit_price", "pnl"]])
+print(summary)
+```
+
+Returned summary fields:
+- `total_pnl`: total P&L across all closed trades.
+- `max_drawdown`: maximum peak-to-trough loss on cumulative trade P&L.
+- `win_rate_pct`: percentage of winning trades.
+- `win_to_lose_ratio`: winners / losers (`inf` when there are winners and no losses).
+

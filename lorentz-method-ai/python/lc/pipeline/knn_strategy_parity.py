@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 
 from ..ta_primitives import atr, ema, rescale, rma
+from ..pipeline.io import validate_ohlcv_columns
 
 
 @dataclass
@@ -94,6 +95,19 @@ def _fill_price_for_level(is_long: bool, bar_open: float, level: float, is_stop:
 
 
 def run_knn_parity(df: pd.DataFrame, cfg: KNNParityConfig) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Run the KNN strategy parity simulation.
+
+    Args:
+        df: DataFrame with required columns (time, open, high, low, close, Volume).
+        cfg: Strategy configuration.
+
+    Returns:
+        Tuple of (signal_trace_df, trade_ledger_df).
+
+    Raises:
+        ValueError: If required columns are missing.
+    """
+    validate_ohlcv_columns(df)
     out = df.copy()
     close = out["close"].astype(float)
     high = out["high"].astype(float)

@@ -10,6 +10,7 @@ import pandas as pd
 from lc.features import make_spec
 from lc.pipeline.ann import ANNConfig, run_ann
 from lc.pipeline.features import generate_features, pine_ann_feature_columns
+from lc.pipeline.io import validate_ohlcv_columns
 
 
 @dataclass
@@ -65,6 +66,23 @@ def lorentzian_classification(
     kernel_settings: KernelSettings = KernelSettings(),
     features: Optional[Iterable[FeatureSpec]] = None,
 ) -> pd.DataFrame:
+    """Run the Lorentzian Classification strategy.
+
+    Args:
+        data: DataFrame with required columns (time, open, high, low, close, Volume).
+        settings: General strategy settings.
+        filter_settings: Filter configuration.
+        trend_filter_settings: EMA/SMA trend filter configuration.
+        kernel_settings: Kernel regression configuration.
+        features: Optional custom feature specifications.
+
+    Returns:
+        DataFrame with prediction, signal, and trade signal columns appended.
+
+    Raises:
+        ValueError: If required columns are missing.
+    """
+    validate_ohlcv_columns(data)  # validate but use original data to preserve extra columns
     specs = None
     if features is not None:
         specs = [

@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import argparse
 
-from lc.pipeline.runner import run_end_to_end
+import pandas as pd
+
+from lc.pipeline.runner import run_end_to_end, run_from_dataframe
+from lc.pipeline.io import load_ohlcv_csv
 
 
 def parse_args() -> argparse.Namespace:
@@ -12,10 +15,23 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
+def run_from_csv(csv_path: str) -> pd.DataFrame:
+    """Load CSV and run the full pipeline.
+
+    Args:
+        csv_path: Path to CSV file with columns (time, open, high, low, close, Volume).
+
+    Returns:
+        DataFrame with prediction, signal, and trade signal columns.
+    """
+    df = load_ohlcv_csv(csv_path)
+    return run_from_dataframe(df)
+
+
 def main() -> None:
     args = parse_args()
-    artifacts = run_end_to_end(args.csv)
-    artifacts.predictions.to_csv(args.out, index=False)
+    result = run_from_csv(args.csv)
+    result.to_csv(args.out, index=False)
     print(f"Saved predictions to {args.out}")
 
 

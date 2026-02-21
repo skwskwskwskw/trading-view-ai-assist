@@ -36,16 +36,44 @@ def _n_wt(hlc3: pd.Series, n1: int, n2: int) -> pd.Series:
 
 
 def _n_adx(high: pd.Series, low: pd.Series, close: pd.Series, length: int) -> pd.Series:
-    tr = (pd.concat([high - low, (high - close.shift(1)).abs(), (low - close.shift(1)).abs()], axis=1)).max(axis=1)
-    plus_dm = (high - high.shift(1)).where((high - high.shift(1)) > (low.shift(1) - low), 0.0).clip(lower=0)
-    minus_dm = (low.shift(1) - low).where((low.shift(1) - low) > (high - high.shift(1)), 0.0).clip(lower=0)
-    tr_s = rma(tr, length)
-    plus_s = rma(plus_dm, length)
-    minus_s = rma(minus_dm, length)
-    di_plus = plus_s / tr_s.replace(0, np.nan) * 100
-    di_minus = minus_s / tr_s.replace(0, np.nan) * 100
-    dx = (di_plus - di_minus).abs() / (di_plus + di_minus).replace(0, np.nan) * 100
-    return rescale(rma(dx, length), 0, 100, 0, 1)
+    """Pine-compatible ADX feature using recursive Wilder smoothing.
+
+    Matches MLExtensions.n_adx which uses:
+        trSmooth := nz(trSmooth[1]) - nz(trSmooth[1]) / length + tr
+    instead of ta.rma (which initializes with SMA).
+    """
+    h = high.to_numpy(dtype=float)
+    l = low.to_numpy(dtype=float)
+    c = close.to_numpy(dtype=float)
+    n = len(h)
+    tr_smooth = np.zeros(n)
+    plus_smooth = np.zeros(n)
+    minus_smooth = np.zeros(n)
+    dx_arr = np.full(n, np.nan)
+
+    for i in range(n):
+        prev_c = c[i - 1] if i > 0 else c[i]
+        tr_val = max(h[i] - l[i], abs(h[i] - prev_c), abs(l[i] - prev_c))
+        prev_h = h[i - 1] if i > 0 else h[i]
+        prev_l = l[i - 1] if i > 0 else l[i]
+        up_move = h[i] - prev_h
+        down_move = prev_l - l[i]
+        plus_dm = max(up_move, 0.0) if up_move > down_move else 0.0
+        minus_dm = max(down_move, 0.0) if down_move > up_move else 0.0
+        # Pine: trSmooth := nz(trSmooth[1]) - nz(trSmooth[1]) / length + tr
+        tr_smooth[i] = tr_smooth[i - 1] - tr_smooth[i - 1] / length + tr_val if i > 0 else tr_val
+        plus_smooth[i] = plus_smooth[i - 1] - plus_smooth[i - 1] / length + plus_dm if i > 0 else plus_dm
+        minus_smooth[i] = minus_smooth[i - 1] - minus_smooth[i - 1] / length + minus_dm if i > 0 else minus_dm
+        if tr_smooth[i] != 0:
+            di_p = plus_smooth[i] / tr_smooth[i] * 100
+            di_n = minus_smooth[i] / tr_smooth[i] * 100
+            denom = di_p + di_n
+            dx_arr[i] = abs(di_p - di_n) / denom * 100 if denom != 0 else 0.0
+        else:
+            dx_arr[i] = 0.0
+
+    adx = rma(pd.Series(dx_arr), length)
+    return rescale(adx, 0, 100, 0, 1)
 
 
 @register_indicator

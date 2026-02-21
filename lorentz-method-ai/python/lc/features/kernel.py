@@ -8,13 +8,22 @@ from .registry import register_indicator
 
 
 def rational_quadratic(src: pd.Series, lookback: int, relative_weight: float, start_at_bar: int) -> pd.Series:
+    """Pine-compatible Rational Quadratic kernel.
+
+    Pine: ``_size = array.size(array.from(_src))`` always equals 1,
+    so the loop runs ``for i = 0 to _size + startAtBar``
+    i.e. ``startAtBar + 2`` iterations (0 .. startAtBar+1 inclusive),
+    clamped by available history.
+    """
     vals = src.to_numpy(dtype=float)
     out = np.full(len(vals), np.nan)
+    # Pine loop count: 0 to (_size + startAtBar) where _size = 1
+    pine_loop_len = 1 + start_at_bar + 1  # inclusive upper bound → +1
     for t in range(len(vals)):
         current_w = 0.0
         cumulative_w = 0.0
-        max_i = min(t + start_at_bar, len(vals) - 1)
-        for i in range(max_i + 1):
+        max_i = min(pine_loop_len, t + 1)  # can't look back further than bar t
+        for i in range(max_i):
             y = vals[t - i]
             w = (1 + (i**2) / ((lookback**2) * 2 * relative_weight)) ** (-relative_weight)
             current_w += y * w
@@ -24,13 +33,18 @@ def rational_quadratic(src: pd.Series, lookback: int, relative_weight: float, st
 
 
 def gaussian(src: pd.Series, lookback: int, start_at_bar: int) -> pd.Series:
+    """Pine-compatible Gaussian kernel.
+
+    Same loop-range logic as rational_quadratic.
+    """
     vals = src.to_numpy(dtype=float)
     out = np.full(len(vals), np.nan)
+    pine_loop_len = 1 + start_at_bar + 1
     for t in range(len(vals)):
         current_w = 0.0
         cumulative_w = 0.0
-        max_i = min(t + start_at_bar, len(vals) - 1)
-        for i in range(max_i + 1):
+        max_i = min(pine_loop_len, t + 1)
+        for i in range(max_i):
             y = vals[t - i]
             w = np.exp(-(i**2) / (2 * (lookback**2)))
             current_w += y * w

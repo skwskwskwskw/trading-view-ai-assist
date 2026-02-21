@@ -38,19 +38,42 @@ def lorentzian_distance(current: np.ndarray, historical: np.ndarray) -> float:
 
 
 def _adx_filter(df: pd.DataFrame, threshold: int, use_filter: bool) -> pd.Series:
+    """Pine-compatible ADX filter using recursive Wilder smoothing."""
     if not use_filter:
         return pd.Series(True, index=df.index)
-    high = df["high"].astype(float)
-    low = df["low"].astype(float)
-    close = df["close"].astype(float)
-    tr = pd.concat([high - low, (high - close.shift(1)).abs(), (low - close.shift(1)).abs()], axis=1).max(axis=1)
-    plus_dm = (high - high.shift(1)).where((high - high.shift(1)) > (low.shift(1) - low), 0.0).clip(lower=0)
-    minus_dm = (low.shift(1) - low).where((low.shift(1) - low) > (high - high.shift(1)), 0.0).clip(lower=0)
-    tr_s = rma(tr, 14)
-    di_plus = 100 * rma(plus_dm, 14) / tr_s.replace(0, np.nan)
-    di_minus = 100 * rma(minus_dm, 14) / tr_s.replace(0, np.nan)
-    dx = (di_plus - di_minus).abs() / (di_plus + di_minus).replace(0, np.nan) * 100
-    return rma(dx, 14) > threshold
+    length = 14
+    high = df["high"].to_numpy(dtype=float)
+    low = df["low"].to_numpy(dtype=float)
+    close = df["close"].to_numpy(dtype=float)
+    n = len(df)
+    tr_smooth = np.zeros(n)
+    plus_smooth = np.zeros(n)
+    minus_smooth = np.zeros(n)
+    dx_arr = np.full(n, np.nan)
+    adx_arr = np.full(n, np.nan)
+    for i in range(n):
+        prev_close = close[i - 1] if i > 0 else close[i]
+        tr_val = max(high[i] - low[i], abs(high[i] - prev_close), abs(low[i] - prev_close))
+        prev_high = high[i - 1] if i > 0 else high[i]
+        prev_low = low[i - 1] if i > 0 else low[i]
+        up_move = high[i] - prev_high
+        down_move = prev_low - low[i]
+        plus_dm = max(up_move, 0.0) if up_move > down_move else 0.0
+        minus_dm = max(down_move, 0.0) if down_move > up_move else 0.0
+        # Pine: trSmooth := nz(trSmooth[1]) - nz(trSmooth[1]) / length + tr
+        tr_smooth[i] = tr_smooth[i - 1] - tr_smooth[i - 1] / length + tr_val if i > 0 else tr_val
+        plus_smooth[i] = plus_smooth[i - 1] - plus_smooth[i - 1] / length + plus_dm if i > 0 else plus_dm
+        minus_smooth[i] = minus_smooth[i - 1] - minus_smooth[i - 1] / length + minus_dm if i > 0 else minus_dm
+        if tr_smooth[i] != 0:
+            di_plus = plus_smooth[i] / tr_smooth[i] * 100
+            di_minus = minus_smooth[i] / tr_smooth[i] * 100
+            denom = di_plus + di_minus
+            dx_arr[i] = abs(di_plus - di_minus) / denom * 100 if denom != 0 else 0.0
+        else:
+            dx_arr[i] = 0.0
+    adx_s = pd.Series(dx_arr)
+    adx_result = rma(adx_s, length)
+    return pd.Series(adx_result.values > threshold, index=df.index)
 
 
 def _volatility_filter(df: pd.DataFrame, use_filter: bool) -> pd.Series:
@@ -96,10 +119,11 @@ def run_ann(df: pd.DataFrame, feature_columns: Sequence[str], cfg: ANNConfig) ->
     predictions = np.zeros(len(out), dtype=float)
     signal = np.zeros(len(out), dtype=int)
     max_bars_back_index = max(len(out) - cfg.max_bars_back, 0)
-    neighbor_predictions: list[int] = []
-    neighbor_distances: list[float] = []
 
     for bar in range(len(out)):
+        # Pine: distances/predictions are non-var => reset every bar
+        neighbor_predictions: list[int] = []
+        neighbor_distances: list[float] = []
         if bar > 0:
             signal[bar] = signal[bar - 1]
         if bar < max_bars_back_index:
@@ -175,8 +199,11 @@ def run_ann(df: pd.DataFrame, feature_columns: Sequence[str], cfg: ANNConfig) ->
     end_long_strict = ((is_held_four & is_last_buy) | (is_held_lt_four & is_new_sell & is_last_buy)) & start_long.shift(4).fillna(False)
     end_short_strict = ((is_held_four & is_last_sell) | (is_held_lt_four & is_new_buy & is_last_sell)) & start_short.shift(4).fillna(False)
 
-    alert_bull = (yhat2 > yhat1) if cfg.use_kernel_smoothing else is_bull_change
-    alert_bear = (yhat2 < yhat1) if cfg.use_kernel_smoothing else is_bear_change
+    # Pine: ta.crossover(yhat2, yhat1) / ta.crossunder(yhat2, yhat1) for smoothing mode
+    _bull_cross = ((yhat2 >= yhat1) & (yhat2.shift(1) < yhat1.shift(1)))  # crossover
+    _bear_cross = ((yhat2 <= yhat1) & (yhat2.shift(1) > yhat1.shift(1)))  # crossunder
+    alert_bull = _bull_cross if cfg.use_kernel_smoothing else is_bull_change
+    alert_bear = _bear_cross if cfg.use_kernel_smoothing else is_bear_change
     v_short = barssince(alert_bull) > barssince(start_short)
     v_long = barssince(alert_bear) > barssince(start_long)
     end_long_dyn = is_bear_change & v_long.shift(1).fillna(False)

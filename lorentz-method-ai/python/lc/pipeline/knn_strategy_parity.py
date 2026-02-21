@@ -6,7 +6,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from ..ta_primitives import atr, ema, rescale
+from ..ta_primitives import atr, ema, rescale, rma
 
 
 @dataclass
@@ -27,11 +27,12 @@ class KNNParityConfig:
 
 
 def _rsi(close: pd.Series, length: int) -> pd.Series:
+    """Pine-compatible RSI using Wilder's smoothing (ta.rma)."""
     delta = close.diff()
     gain = delta.where(delta > 0, 0.0)
     loss = -delta.where(delta < 0, 0.0)
-    avg_gain = gain.ewm(alpha=1 / length, adjust=False).mean()
-    avg_loss = loss.ewm(alpha=1 / length, adjust=False).mean()
+    avg_gain = rma(gain, length)
+    avg_loss = rma(loss, length)
     rs = avg_gain / avg_loss.replace(0, np.nan)
     return 100 - (100 / (1 + rs))
 
@@ -54,13 +55,20 @@ def _n_mom(src: pd.Series, length: int) -> pd.Series:
     return (mom - hist_min) / denom
 
 
-def _gaussian_smooth(src: pd.Series, length: int) -> pd.Series:
+def _gaussian_smooth(src: pd.Series, length: int, start_at_bar: int = 25) -> pd.Series:
+    """Pine-compatible Gaussian smoothing with fixed-window iteration.
+
+    Pine: ``_size = array.size(array.from(_src))`` always equals 1,
+    so loop runs ``for i = 0 to _size + startAtBar`` = ``start_at_bar + 2`` iterations.
+    """
     vals = src.to_numpy(dtype=float)
     out = np.full(len(vals), np.nan)
+    pine_loop_len = 1 + start_at_bar + 1  # inclusive upper bound
     for t in range(len(vals)):
         w_sum = 0.0
         v_sum = 0.0
-        for i in range(t + 1):
+        max_i = min(pine_loop_len, t + 1)
+        for i in range(max_i):
             w = float(np.exp(-((i**2) / (2 * (length**2)))))
             v_sum += vals[t - i] * w
             w_sum += w

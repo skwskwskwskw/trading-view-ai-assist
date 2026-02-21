@@ -36,8 +36,14 @@ def atr(high: pd.Series, low: pd.Series, close: pd.Series, length: int) -> pd.Se
 
 
 def normalize(src: pd.Series, new_min: float, new_max: float) -> pd.Series:
-    hist_min = src.cummin()
-    hist_max = src.cummax()
+    """Pine-compatible normalize: NaN values are ignored in min/max tracking.
+
+    Pine uses ``nz(src, _historicMin)`` which substitutes NaN with the current
+    running min, effectively skipping NaN when updating the historic extremes.
+    """
+    filled = src.ffill()  # forward-fill NaN so cummin/cummax skip gaps
+    hist_min = filled.expanding().min()
+    hist_max = filled.expanding().max()
     denom = (hist_max - hist_min).replace(0, 1e-10)
     return new_min + (new_max - new_min) * (src - hist_min) / denom
 

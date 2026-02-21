@@ -1,5 +1,21 @@
 # Pine ↔ Python Parity Notes
 
+## What is different now: Python modules vs Pine Script modules
+
+| Area | Pine modules (`*.ps`) | Python modules (`python/lc/**/*.py`) | Practical difference |
+|---|---|---|---|
+| Packaging model | 5 script/library files: `Machine Learning Lorentzian Classification.ps`, `Lorentzian-KNN-strategy-AI.ps`, `MLExtensions.ps`, `KernelFunctions.ps`, `Backtest Adapter.ps`. | Multi-package layout (`lc/features`, `lc/pipeline`, `lc/ta_primitives`). | Python splits responsibilities into smaller importable modules instead of indicator-local library scripts. |
+| Runtime | TradingView bar engine with implicit series semantics and `var` lifetime rules. | Pandas/NumPy batch execution over DataFrames/arrays. | Python must explicitly emulate Pine bar-by-bar behavior where parity matters. |
+| Feature extensibility | Feature choices are hard-coded input switch/case paths in script logic. | Registry-based plugin system (`register_indicator`, `build_feature_frame`). | Adding a feature in Python is modular (new class + registry), while Pine edits the script/library directly. |
+| State & arrays | Stateful series/arrays managed by Pine VM (`var`, history references, built-in `ta.*`). | Explicit Python containers and shifted vectors (`shift`, rolling arrays, helper primitives). | Pine state behavior has to be recreated with deterministic helper functions in Python. |
+| Strategy execution semantics | `strategy.entry/exit` and broker simulation are built-in. | Local state machine in `run_knn_parity` reproduces entry/exit/ATR/trailing behavior. | Python contains custom execution modeling to match TradingView fills/exit decisions. |
+| Outputs | Visual plots/labels/alerts + strategy tester outputs inside TradingView. | CSV artifacts (`predictions.csv`, `python_signal_trace.csv`, `python_trade_ledger.csv`) and test assertions. | Python parity is validated by files/tests rather than chart visualization. |
+| Validation approach | Visual chart review + TradingView backtest panel. | Unit tests (`tests/`) + parity diff files (`trace_mismatch.csv`, `trade_mismatch.csv`). | Python has automated regression checks across modules; Pine relies more on in-platform execution. |
+
+### Bottom line
+
+The Pine files still define the canonical indicator/strategy behavior, but Python now has a **more granular module graph** that separates primitives, feature plugins, pipeline orchestration, ANN logic, and strategy parity execution. This means parity requires explicit translation of Pine runtime semantics, while Python gains easier testability and extension.
+
 ## Original Lorentzian Classification Indicator
 
 ### Mapping Table: `Machine Learning Lorentzian Classification.ps` + libraries → Python
